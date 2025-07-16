@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Wills Park Court Reservation</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background-color: #f5f0ea;
+      color: #3c2f2f;
+      margin: 0;
+      padding: 1rem;
+    }
+    h1, h2 {
+      text-align: center;
+      color: #5e4b3c;
+    }
+    .container {
+      max-width: 700px;
+      margin: auto;
+      background: #fffdf8;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    }
+    label {
+      display: block;
+      margin-top: 1rem;
+      font-weight: bold;
+    }
+    input, select {
+      width: 100%;
+      padding: 0.5rem;
+      margin-top: 0.25rem;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      margin-top: 1.5rem;
+      background-color: #6c584c;
+      color: #fff;
+      border: none;
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #5a4a3c;
+    }
+    .message {
+      text-align: center;
+      margin-top: 1rem;
+      font-weight: bold;
+    }
+    .success { color: green; }
+    .error { color: red; }
+    .view-section {
+      display: none;
+      margin-top: 2rem;
+    }
+    .reservation-list {
+      list-style: none;
+      padding-left: 0;
+      margin-top: 1rem;
+    }
+    .reservation-list li {
+      background: #f3ede3;
+      padding: 1rem;
+      margin-bottom: 0.5rem;
+      border-left: 4px solid #6c584c;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h1>Reserve a Court</h1>
+  <form id="reservationForm">
+    <label for="name">Your Name</label>
+    <input type="text" id="name" required />
+
+    <label for="phone">Phone Number</label>
+    <input type="text" id="phone" placeholder="+1XXXXXXXXXX" required />
+
+    <label for="court">Court Number</label>
+    <input type="text" id="court" placeholder="e.g., WL1, WB3" required />
+
+    <label for="startTime">Start Time</label>
+    <input type="time" id="startTime" required />
+
+    <label for="duration">Session Length</label>
+    <select id="duration" required>
+      <option value="30">30 minutes</option>
+      <option value="45">45 minutes</option>
+      <option value="60">60 minutes</option>
+      <option value="75">75 minutes</option>
+      <option value="90">90 minutes</option>
+    </select>
+
+    <label for="adminCode">Admin Override (optional)</label>
+    <input type="text" id="adminCode" />
+
+    <button type="submit">Submit Reservation</button>
+    <div id="message" class="message"></div>
+  </form>
+
+  <button onclick="showViewSection()">View Booked Courts</button>
+
+  <div id="viewSection" class="view-section">
+    <h2>Currently Booked Courts</h2>
+    <ul id="reservationList" class="reservation-list"><li>Loading...</li></ul>
+  </div>
+</div>
+
+<script>
+  function roundTimeToNearest5(date = new Date()) {
+    const coeff = 1000 * 60 * 5;
+    return new Date(Math.ceil(date.getTime() / coeff) * coeff);
+  }
+
+  function setDefaultTime() {
+    const input = document.getElementById('startTime');
+    const now = roundTimeToNearest5();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    input.value = `${hh}:${mm}`;
+  }
+
+  setDefaultTime();
+
+  document.getElementById('reservationForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('name').value.trim();
+    const phone = document.getElementById('phone').value.trim();
+    const court = document.getElementById('court').value.trim().toUpperCase();
+    const startTime = document.getElementById('startTime').value;
+    const duration = parseInt(document.getElementById('duration').value);
+    const adminCode = document.getElementById('adminCode').value.trim();
+    const messageEl = document.getElementById('message');
+
+    try {
+      const position = await new Promise((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 })
+      );
+      const { latitude: lat, longitude: lng } = position.coords;
+
+      const res = await fetch('https://us-central1-willspark-2ec4d.cloudfunctions.net/reserveCourtV1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, phone, court, startTime, duration, adminCode, lat, lng })
+      });
+
+      const text = await res.text();
+      if (res.ok) {
+        messageEl.textContent = 'Reservation successful!';
+        messageEl.className = 'message success';
+        loadReservations();
+      } else {
+        messageEl.textContent = 'Error: ' + text;
+        messageEl.className = 'message error';
+      }
+    } catch (err) {
+      messageEl.textContent = 'Failed to get location or submit.';
+      messageEl.className = 'message error';
+      console.error(err);
+    }
+  });
+
+  function showViewSection() {
+    document.getElementById('viewSection').style.display = 'block';
+    loadReservations();
+  }
+
+  async function loadReservations() {
+    const list = document.getElementById('reservationList');
+    list.innerHTML = '<li>Loading...</li>';
+    try {
+      const res = await fetch('https://us-central1-willspark-2ec4d.cloudfunctions.net/getReservations');
+      const reservations = await res.json();
+      const now = new Date();
+      list.innerHTML = '';
+
+      reservations.forEach(r => {
+        if (!r.startTimestamp || !r.endTimestamp || !r.court) return;
+
+        const start = new Date(r.startTimestamp._seconds * 1000);
+        const end = new Date(r.endTimestamp._seconds * 1000);
+
+        if (now < end) {
+          const item = document.createElement('li');
+          const minutesLeft = Math.max(0, Math.round((end - now) / 60000));
+
+          if (now >= start) {
+            item.textContent = `Court ${r.court} — in use, ends at ${end.toLocaleTimeString()}, free in ${minutesLeft} mins.`;
+          } else {
+            item.textContent = `Court ${r.court} — booked for ${r.duration} mins starting at ${start.toLocaleTimeString()}.`;
+          }
+
+          list.appendChild(item);
+        }
+      });
+
+      if (list.innerHTML.trim() === '') {
+        list.innerHTML = '<li>No courts currently booked.</li>';
+      }
+    } catch (err) {
+      console.error(err);
+      list.innerHTML = '<li>Error loading reservations.</li>';
+    }
+  }
+</script>
+</body>
+</html>

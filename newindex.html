@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wills Park Court Booking</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #eafbea;
+      color: #2c3e50;
+      margin: 0;
+    }
+    header {
+      background: #2e7d32;
+      color: #fff;
+      padding: 1rem;
+      text-align: center;
+    }
+    .container {
+      padding: 1rem;
+      max-width: 700px;
+      margin: auto;
+    }
+    button {
+      padding: 0.5rem 1rem;
+      background: #388e3c;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #2e7d32;
+    }
+    .hidden {
+      display: none;
+    }
+    .court-list li {
+      margin: 0.5rem 0;
+      padding: 0.5rem;
+      background: #f1f8e9;
+      border-left: 5px solid #66bb6a;
+    }
+    .free {
+      background: #ffffff;
+      border-left: 5px solid #b2dfdb;
+    }
+    .countdown {
+      color: #c62828;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Wills Park Court Booking</h1>
+    <button onclick="showPage('booking')">Booking Form</button>
+    <button onclick="showPage('viewing'); loadReservations()">View Courts</button>
+  </header>
+
+  <div id="booking" class="container">
+    <form id="reservationForm">
+      <label for="name">Name</label>
+      <input id="name" required>
+
+      <label for="phone">Phone</label>
+      <input id="phone" required>
+
+      <label for="court">Court Code (e.g., WL3 or WB8)</label>
+      <input id="court" required>
+
+      <label for="startTime">Start Time</label>
+      <input id="startTime" type="time" required>
+
+      <label for="duration">Duration</label>
+      <select id="duration" required>
+        <option value="30">30 minutes</option>
+        <option value="45">45 minutes</option>
+        <option value="60">60 minutes</option>
+      </select>
+
+      <label for="adminCode">Admin Code (optional)</label>
+      <input id="adminCode">
+
+      <button type="submit">Submit Reservation</button>
+      <div id="formMessage"></div>
+    </form>
+  </div>
+
+  <div id="viewing" class="container hidden">
+    <label>Filter Park
+      <select id="filterPark">
+        <option value="">All</option>
+        <option value="WL">Wills</option>
+        <option value="WB">Webb Bridge</option>
+      </select>
+    </label>
+    <h3>Booked Courts</h3>
+    <ul id="bookedList" class="court-list"></ul>
+    <h3>Free Courts</h3>
+    <ul id="freeList" class="court-list"></ul>
+  </div>
+
+  <script>
+    function showPage(id) {
+      document.getElementById('booking').classList.add('hidden');
+      document.getElementById('viewing').classList.add('hidden');
+      document.getElementById(id).classList.remove('hidden');
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const now = new Date();
+      now.setMinutes(Math.ceil(now.getMinutes() / 5) * 5);
+      document.getElementById('startTime').value = now.toTimeString().slice(0,5);
+
+      document.getElementById('reservationForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('name').value.trim();
+        const phone = document.getElementById('phone').value.trim();
+        const court = document.getElementById('court').value.trim().toUpperCase();
+        const startTime = document.getElementById('startTime').value;
+        const duration = parseInt(document.getElementById('duration').value);
+        const adminCode = document.getElementById('adminCode').value.trim();
+        const messageEl = document.getElementById('formMessage');
+
+        try {
+          const position = await new Promise((resolve, reject) =>
+            navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 })
+          );
+          const { latitude: lat, longitude: lng } = position.coords;
+
+          const res = await fetch('https://us-central1-willspark-2ec4d.cloudfunctions.net/reserveCourtV1', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, phone, court, startTime, duration, adminCode, lat, lng })
+          });
+
+          const text = await res.text();
+          if (res.ok) {
+            messageEl.textContent = 'Reservation confirmed';
+          } else {
+            messageEl.textContent = `Error: ${text}`;
+          }
+        } catch (err) {
+          messageEl.textContent = 'Error submitting reservation';
+        }
+      });
+    });
+
+    async function loadReservations() {
+      const bookedList = document.getElementById('bookedList');
+      const freeList = document.getElementById('freeList');
+      const filter = document.getElementById('filterPark').value;
+
+      bookedList.innerHTML = '';
+      freeList.innerHTML = '';
+
+      const courts = [];
+      ["WL", "WB"].forEach(p => { for (let i = 1; i <= 10; i++) courts.push(`${p}${i}`); });
+      const active = new Set();
+
+      try {
+        const res = await fetch('https://us-central1-willspark-2ec4d.cloudfunctions.net/getReservations');
+        const data = await res.json();
+        console.log("Fetched reservations:", data);
+        const now = new Date();
+
+        data.forEach(r => {
+          if (!r.startTime || !r.duration || !r.court) return;
+
+          const [hh, mm] = r.startTime.split(":").map(Number);
+          const start = new Date();
+          start.setHours(hh, mm, 0, 0);
+          const end = new Date(start.getTime() + r.duration * 60000);
+
+          if (end > now && (!filter || r.court.startsWith(filter))) {
+            active.add(r.court);
+            const li = document.createElement('li');
+            const minutesLeft = Math.max(0, Math.round((end - now) / 60000));
+            li.innerHTML = `Court ${r.court} booked until ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} <span class="countdown">(${minutesLeft} min left)</span>`;
+            bookedList.appendChild(li);
+          }
+        });
+
+        courts.filter(code => !active.has(code) && (!filter || code.startsWith(filter)))
+          .forEach(code => {
+            const li = document.createElement('li');
+            li.textContent = `Court ${code} is free.`;
+            li.classList.add('free');
+            freeList.appendChild(li);
+          });
+
+      } catch (err) {
+        bookedList.innerHTML = '<li>Error loading reservations.</li>';
+      }
+    }
+  </script>
+</body>
+</html>
