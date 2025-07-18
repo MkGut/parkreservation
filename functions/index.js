@@ -1,6 +1,7 @@
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const cors = require("cors")({ origin: true });
+const { DateTime } = require("luxon");
 // const twilio = require("twilio"); // Uncomment when Twilio is ready
 
 admin.initializeApp();
@@ -34,6 +35,10 @@ exports.reserveCourtV1 = functions.https.onRequest((req, res) => {
     const { name, phone, court, startTime, duration, adminCode, lat, lng } = req.body;
     const isAdmin = adminCode === ADMIN_OVERRIDE_CODE;
 
+    if (!/^WL\d{1,2}$|^WB\d{1,2}$/i.test(court)) {
+      return res.status(400).send("Invalid court code. Use format WL1–WL10 or WB1–WB10.");
+    }
+
     if (!isAdmin) {
       if (lat == null || lng == null) {
         return res.status(400).send("Location data is required.");
@@ -45,10 +50,19 @@ exports.reserveCourtV1 = functions.https.onRequest((req, res) => {
     }
 
     try {
-      const [hh, mm] = startTime.split(":").map(Number);
-      const now = new Date();
-      now.setUTCHours(hh, mm, 0, 0);
-      const end = new Date(now.getTime() + duration * 60000);
+      const [hh, mm] = startTime.split(":" ).map(Number);
+      const nowET = DateTime.now().setZone("America/New_York");
+      const start = DateTime.fromObject(
+        {
+          year: nowET.year,
+          month: nowET.month,
+          day: nowET.day,
+          hour: hh,
+          minute: mm,
+        },
+        { zone: "America/New_York" }
+      );
+      const end = start.plus({ minutes: duration });
 
       await db.collection("reservations").add({
         name,
@@ -58,8 +72,8 @@ exports.reserveCourtV1 = functions.https.onRequest((req, res) => {
         duration,
         status: "confirmed",
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
-        startTimestamp: admin.firestore.Timestamp.fromDate(now),
-        endTimestamp: admin.firestore.Timestamp.fromDate(end),
+        startTimestamp: admin.firestore.Timestamp.fromDate(start.toJSDate()),
+        endTimestamp: admin.firestore.Timestamp.fromDate(end.toJSDate()),
       });
 
       res.status(200).send("Reservation confirmed.");
@@ -88,12 +102,16 @@ exports.getReservations = functions.https.onRequest((req, res) => {
 
       const reservations = snapshot.docs.map(doc => {
         const data = doc.data();
+        const startET = DateTime.fromJSDate(data.startTimestamp.toDate()).setZone("America/New_York");
+        const endET = DateTime.fromJSDate(data.endTimestamp.toDate()).setZone("America/New_York");
         return {
           court: data.court,
           startTime: data.startTime,
           duration: data.duration,
           startTimestamp: data.startTimestamp.toDate(),
-          endTimestamp: data.endTimestamp.toDate()
+          endTimestamp: data.endTimestamp.toDate(),
+          startTimeET: startET.toISO(),
+          endTimeET: endET.toISO()
         };
       });
 
